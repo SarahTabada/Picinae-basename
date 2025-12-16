@@ -600,15 +600,7 @@ end.
 Theorem welltyped: welltyped_prog arm8typctx basename.
 Proof. Picinae_typecheck. Qed.
 
-
-(* * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
- *                                                         *
- *                  Your face                              *
- *                                                         *
- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *)
-
 Import ARM8Notations.
-
 (* The ARMv8 lifter models non-writable code. *)
 Theorem strcasecmp_nwc:
 	forall s2 s1, basename s1 = basename s2.
@@ -641,13 +633,11 @@ Section Invariants.
      strings, where the two strings are identical before k, and z may only be
      zero if the kth bytes are both nil. *)
   Definition postcondition (s:store) :=
-    exists k (*fb*),
+    (*exists k (*fb*),*)
       (*s V_MEM64 = mem'' k p sb fb /\*)
       (arg1 <> 0 -> 
-      (arg1 < (sp ⊖ 48) /\ arg1+k < (sp ⊖ 48)) \/ (arg1 > (sp) /\ arg1+k > (sp)) ->
-      (k <> 0) -> (
-        strlen mem arg1 k /\
-        (s R_X0 = arg1 \/ (s V_MEM64)Ⓑ[(s R_X0)-1]=47))).
+      (*(arg1 < (sp ⊖ 48) /\ arg1+k < (sp ⊖ 48)) \/ (arg1 > (sp) /\ arg1+k > (sp)) ->*)
+      (s R_X0 = arg1 \/ (s V_MEM64)Ⓑ[(s R_X0)⊖1]=47)).
 
   (* Invariant sets f for multi-subroutine properties have the following signature:
         f (T:Type) (Invs Post: inv_type T) (NoInv:T) (s:store) (a:addr) : T
@@ -676,23 +666,9 @@ Section Invariants.
      (hidden) parameters before T within the P arguments of Inv and Post. *)
   Definition invs T (Inv Post: inv_type T) (NoInv:T) (s:store) (a:addr) : T :=
     match a with
-    (* basename entry point *)
-    | 1048580 => Inv 1 (
-        s R_SP = sp /\ s V_MEM64 = mem /\ s R_X0 = arg1
-      )
-
-    (* loop invariant *)
-    | 0x100028 => Inv 1 (exists p k (*fb*),
-        s R_X0 = p-1 /\
-        strlen mem p k (*/\
-        s V_MEM64 = mem'' k p sb fb*)
-      )
-
-    (* loop invariant *)
-    | 0x100038 => Inv 1 (exists p k (*fb*),
-        s R_X0 = p /\
-        strlen mem p k (*/\
-        s V_MEM64 = mem'' k p sb fb*)
+    (* basename entry point and loop invariant *)
+    | 0x100038 => Inv 1 (
+        s V_MEM64 = mem /\ s R_X19 = arg1
       )
 
     (* basename return site 1 (null)*)
@@ -701,16 +677,6 @@ Section Invariants.
     (* basename return site 2 main cases*)
     | 0x100058 => Post 1 (postcondition s)
 
-    (* strlen entry point *)
-    | 0x200000 => Inv 0 (s R_X0 = arg1 /\
-         s R_X19 = x19 /\ s R_X20 = x20 /\ s R_X21 = x21 /\
-         s R_X30 = raddr /\ s R_SP = sp /\ s V_MEM64 = mem)
-
-    (* strlen return point *)
-    | 0x200044 => Post 0 (strlen mem arg1 (s R_X0) /\
-         s R_X19 = x19 /\ s R_X20 = x20 /\ s R_X21 = x21 /\
-         s R_X30 = raddr /\ s R_SP = sp /\ s V_MEM64 = mem)
-
     | _ => NoInv
     end.
 
@@ -718,56 +684,23 @@ Section Invariants.
      define appropriate invariant sets for each subroutine by extracting them
      from the above.  Note that these definitions receive the same extra hidden
      parameters as invs above, so are actually invariant set families. *)
-  Definition exits0 := make_exits 0 basename invs.
-  Definition invs0 := make_invs 0 basename invs.
   Definition exits1 := make_exits 1 basename invs.
   Definition invs1 := make_invs 1 basename invs.
 
 End Invariants.
 
+
 (* Create a step tactic that prints a progress message (for demos). *)
 Ltac step := time arm8_step.
-
-(* Prove that each subroutine satisfies the invariant set, starting with callees
-   and proceeding to callers.  In this case, we start with subroutine strlen: *)
-Theorem strlen_correctness:
-  forall s sp mem t xs' arg1 arg2 a'
-         (ENTRY: startof t xs' = (Addr 0x200000, s))
-         (MDL: models arm8typctx s)
-         (SP: s R_SP = sp) (MEM: s V_MEM64 = mem)
-         (X0: s R_X0 = arg1) (X19: s R_X19 = arg2)
-         (X30: s R_X30 = a'),
-  satisfies_all basename (invs0  sp mem a' arg1 arg2 (s R_X20) (s R_X21))
-                           (exits0 sp mem a' arg1 arg2 (s R_X20) (s R_X21)) (xs'::t).
-Proof.
-(*
-(* Use prove_invs to initiate a proof by induction. *)
-  intros. apply prove_invs.
-
-(* Base case: The invariant at the subroutine entry point is satisfied. *)
-  simpl. rewrite ENTRY. step. repeat split; assumption.
-
-intros.
-  erewrite startof_prefix in ENTRY; try eassumption.
-  eapply models_at_invariant; try eassumption. apply welltyped. intro MDL1.
-  clear - PRE MDL1. rename t1 into t.
-
-(* Break the proof into cases, one for each internal invariant-point. *)
-  destruct_inv 64 PRE.
-
-destruct PRE as (X0 & X19 & X20 & X21 & X30 & SP & MEM).
-  step. step. step.
-*)
-Admitted.
 
 (* Now prove correctness of the main basename subroutine,
    using our earlier proof of tolower at subroutine calls. *)
 Theorem basename_partial_correctness:
   forall s sp mem t s' x' arg1 arg2 a'
-         (ENTRY: startof t (x',s') = (Addr 0x100004, s))
+         (ENTRY: startof t (x',s') = (Addr 0x100038, s))
          (MDL: models arm8typctx s)
          (SP: s R_SP = sp) (MEM: s V_MEM64 = mem) (X30: s R_X30 = a')
-         (RX0: s R_X0 = arg1) (RX1: s R_X1 = arg2),
+         (RX0: s R_X19 = arg1) (RX1: s R_X1 = arg2),
   satisfies_all basename (invs1  sp mem a' arg1 arg2 (s R_X20) (s R_X21))
                            (exits1 sp mem a' arg1 arg2 (s R_X20) (s R_X21)) ((x',s')::t).
 Proof.
@@ -788,46 +721,22 @@ Proof.
   destruct_inv 64 PRE.
 
   (* Address 1048576: strcasecmp entry point *)
-  destruct PRE as (SP & MEM & X0).
+  destruct PRE as (MEM & X0).
 
-  (* case 1: nullptr*)
-  step. step. step.
-Print generalize_frame.
-    (*generalize_frame mem as fb.*)
-    exists 0. destruct arg1; intro. destruct H. reflexivity. discriminate.
 
-  (* case 2: empty string *)
-  step. step. step. step. step. step. step. step. step. step. step.
-  exists 0. intros. destruct H1. reflexivity.
 
-  (* case 3: legit string *)
-        step.
-        set (s1 := update _ _ _).
-        eapply models_after_steps. eassumption. apply welltyped. intro MDL1.
-        eapply (perform_call 0). reflexivity.
-        intros. eapply strlen_correctness; (eassumption || reflexivity).
-        reflexivity.
+  (* case 1: entry -> index 0 exit*)
+  step. step. step. step.
+  intros. left. apply Neqb_ok in BC. rewrite BC. psimpl. reflexivity.
 
-  (* Clean up the proof context after the call by creating hypotheses
-           about the post-call cpu state s1 and discarding hypotheses about
-           old cpu states. *)
-        intros.
-        unfold s1 in PRE. psimpl in PRE.
-        assert (MDL': models arm8typctx s').
-          eapply preservation_exec_prog; try eassumption.
-          apply welltyped.
-        set (t' := t2++t0++_::t) in *. clearbody s1 t'.
-        set (x21' := s R_X21) in PRE. clearbody x21'.
-        clear - BC BC0 PRE MDL'.
-        rename MDL' into MDL. rename t' into t. rename a'0 into a.
+  (* case 2: entry -> prev char is slash *)
+  step. step. step. step. step. step. step.
+  intro. right. apply Neqb_ok in BC0. assumption.
 
-  (* Separate the proof into one subgoal for each subroutine exit point.
-           (In the case of strlen, there's only one exit point. *)
-        destruct_inv 64 PRE.
 
-        destruct PRE as (X0 & X19 & X20 & X21 & X30 & SP & MEM).
-        clear X21 x21'. (* This particular call site ignores x21, so delete it. *)
-        step. step.
-         
+  (* case 4: loop invariant -> entry *)
+  step. step.
+  split; reflexivity.
 
+Qed.
 
